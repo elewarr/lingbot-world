@@ -527,6 +527,9 @@ class WanModelMLX(nn.Module):  # type: ignore[misc, name-defined]
     def _infer_config_from_weights(weights: Dict[str, mx.array]) -> Dict[str, Any]:
         """Infer model configuration from weight shapes.
 
+        NOTE: Weights are in PyTorch format [out_features, in_features] since
+        we no longer transpose during conversion.
+
         Args:
             weights: Dictionary of MLX weights
 
@@ -536,17 +539,17 @@ class WanModelMLX(nn.Module):  # type: ignore[misc, name-defined]
         config: Dict[str, Any] = {}
 
         # Infer dim from block weights
-        # After our converter: Linear weight is [in_features, out_features]
+        # Weight shape: [out_features, in_features] = [dim, dim] for q projection
         if 'blocks.0.self_attn.q.weight' in weights:
             w = weights['blocks.0.self_attn.q.weight']
             # For q projection: in=dim, out=dim, so both dimensions are dim
-            config['dim'] = int(w.shape[0])  # in_features = dim
+            config['dim'] = int(w.shape[0])  # out_features = dim
 
         # Infer ffn_dim from ffn.0 weight
-        # ffn.0 is Linear(dim, ffn_dim), so weight is [dim, ffn_dim] after transpose
+        # ffn.0 is Linear(dim, ffn_dim), weight shape: [ffn_dim, dim]
         if 'blocks.0.ffn.0.weight' in weights:
             w = weights['blocks.0.ffn.0.weight']
-            config['ffn_dim'] = int(w.shape[1])  # out_features = ffn_dim
+            config['ffn_dim'] = int(w.shape[0])  # out_features = ffn_dim
 
         # Infer num_heads from head_dim if possible
         if 'dim' in config:
@@ -567,14 +570,16 @@ class WanModelMLX(nn.Module):  # type: ignore[misc, name-defined]
             config['num_layers'] = block_count
 
         # Infer text_dim from text embedding weights
+        # text_embedding.0 is Linear(text_dim, dim), weight shape: [dim, text_dim]
         if 'text_embedding.0.weight' in weights:
             w = weights['text_embedding.0.weight']
-            config['text_dim'] = int(w.shape[0])  # in_features
+            config['text_dim'] = int(w.shape[1])  # in_features = text_dim
 
         # Infer freq_dim from time embedding weights
+        # time_embedding.0 is Linear(freq_dim, dim), weight shape: [dim, freq_dim]
         if 'time_embedding.0.weight' in weights:
             w = weights['time_embedding.0.weight']
-            config['freq_dim'] = int(w.shape[0])  # in_features
+            config['freq_dim'] = int(w.shape[1])  # in_features = freq_dim
 
         return config
 

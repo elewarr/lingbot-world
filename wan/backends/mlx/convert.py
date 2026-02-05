@@ -1,13 +1,15 @@
 """Weight converter for PyTorch to MLX format.
 
 This module converts PyTorch WanModel checkpoints to MLX-compatible format,
-handling the necessary weight transpositions and caching for efficient reuse.
+with caching for efficient reuse.
 
 Key transformations:
-1. Linear weights: transpose [out_features, in_features] -> [in_features, out_features]
-2. Convert torch.Tensor / numpy -> mx.array
-3. Handle dtype conversion (bfloat16/float16 -> float32 for MPS compatibility)
-4. Cache to ~/.cache/lingbot-world/mlx/{model_name}.safetensors
+1. Convert torch.Tensor / numpy -> mx.array
+2. Handle dtype conversion (bfloat16/float16 -> float32 for MPS compatibility)
+3. Cache to ~/.cache/lingbot-world/mlx/{model_name}.safetensors
+
+NOTE: MLX nn.Linear uses the SAME weight layout as PyTorch [out_features, in_features],
+so NO transpose is needed for linear weights.
 
 Supports:
 - Single-file .safetensors checkpoints
@@ -110,22 +112,27 @@ def is_linear_weight(name: str) -> bool:
 def needs_transpose(name: str, shape: Tuple[int, ...]) -> bool:
     """Determine if a weight tensor needs to be transposed.
 
-    Linear layers in PyTorch have weights of shape [out_features, in_features],
-    while MLX expects [in_features, out_features]. This function determines
-    if a weight should be transposed based on its name and shape.
+    NOTE: MLX nn.Linear uses the SAME weight layout as PyTorch:
+    [out_features, in_features]. Therefore, NO transpose is needed
+    for linear weights when converting from PyTorch to MLX.
+
+    This function is kept for potential future use with other layer types
+    but currently always returns False for linear weights.
 
     Args:
         name: Parameter name
         shape: Tensor shape
 
     Returns:
-        True if the weight should be transposed
+        True if the weight should be transposed (always False for linear weights)
     """
-    # Only 2D weights can be transposed
+    # Only 2D weights could be transposed
     if len(shape) != 2:
         return False
 
-    return is_linear_weight(name)
+    # MLX nn.Linear uses same layout as PyTorch: [out_features, in_features]
+    # No transpose needed for linear weights
+    return False
 
 
 def convert_weight(

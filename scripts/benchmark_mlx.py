@@ -449,12 +449,16 @@ def run_full_mlx_benchmark(
     lat_f = (config.frames - 1) // 4 + 1
     seq_len = lat_f * lat_h * lat_w // 4  # divide by patch_size product
     
-    in_dim = 16  # VAE latent channels
-    x_channels = in_dim // 2  # For concatenated i2v mode
+    # LingBot model uses in_dim=36:
+    # - x (noise latent): 16 channels
+    # - y (mask + VAE latent): 4 + 16 = 20 channels
+    # - Total after concat: 16 + 20 = 36 channels
+    x_channels = 16  # VAE latent channels for noise
+    y_channels = 20  # mask (4) + VAE latent (16) for conditional
     
     np.random.seed(42)
-    x = [mx.array(np.random.randn(in_dim, lat_f, lat_h, lat_w).astype(np.float32))]
-    y = [mx.array(np.random.randn(in_dim, lat_f, lat_h, lat_w).astype(np.float32))]
+    x = [mx.array(np.random.randn(x_channels, lat_f, lat_h, lat_w).astype(np.float32))]
+    y = [mx.array(np.random.randn(y_channels, lat_f, lat_h, lat_w).astype(np.float32))]
     context = [mx.array(np.random.randn(256, 4096).astype(np.float32))]  # T5 output
     
     step_times: List[float] = []
@@ -562,11 +566,16 @@ def run_full_pytorch_benchmark(
     lat_h, lat_w = 30, 52
     lat_f = (config.frames - 1) // 4 + 1
     seq_len = lat_f * lat_h * lat_w // 4
-    in_dim = 16
+    
+    # LingBot model uses in_dim=36:
+    # - x (noise latent): 16 channels
+    # - y (mask + VAE latent): 4 + 16 = 20 channels
+    x_channels = 16
+    y_channels = 20
     
     torch.manual_seed(42)
-    x = [torch.randn(in_dim, lat_f, lat_h, lat_w, device=device, dtype=torch.float32)]
-    y = [torch.randn(in_dim, lat_f, lat_h, lat_w, device=device, dtype=torch.float32)]
+    x = [torch.randn(x_channels, lat_f, lat_h, lat_w, device=device, dtype=torch.float32)]
+    y = [torch.randn(y_channels, lat_f, lat_h, lat_w, device=device, dtype=torch.float32)]
     context = [torch.randn(256, 4096, device=device, dtype=torch.float32)]
     
     step_times: List[float] = []

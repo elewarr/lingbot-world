@@ -25,6 +25,7 @@ from .quantize import (
     QuantizationConfig,
     DEFAULT_EXCLUDE_PATTERNS,
 )
+from .backend import MLXBackend
 
 __all__ = [
     # Norm layers
@@ -59,4 +60,6 @@ __all__ = [
     'get_model_memory_bytes',
     'QuantizationConfig',
     'DEFAULT_EXCLUDE_PATTERNS',
+    # Backend
+    'MLXBackend',
 ]

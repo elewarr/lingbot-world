@@ -96,6 +96,18 @@ def _validate_args(args):
             args.
             task], f"Unsupport size {args.size} for task {args.task}, supported sizes are: {', '.join(SUPPORTED_SIZES[args.task])}"
 
+    # Backend validation
+    if args.backend == 'mlx':
+        if not IS_MACOS:
+            raise ValueError("MLX backend is only available on macOS")
+        try:
+            from wan.backends import get_backend
+            backend = get_backend('mlx')
+            if not backend.is_available:
+                raise ValueError("MLX backend is not available. Requires Apple Silicon.")
+        except ImportError as e:
+            raise ValueError(f"MLX backend not available: {e}")
+
 
 def _parse_args():
     parser = argparse.ArgumentParser(
@@ -221,6 +233,12 @@ def _parse_args():
         action="store_true",
         default=False,
         help="Whether to convert model paramerters dtype.")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="pytorch",
+        choices=["pytorch", "mlx"],
+        help="Backend for DiT model inference: 'pytorch' (default) or 'mlx' (Apple Silicon only)")
     
     args = parser.parse_args()
     _validate_args(args)
@@ -283,6 +301,14 @@ def generate(args):
 
     logging.info(f"Generation job args: {args}")
     logging.info(f"Generation model config: {cfg}")
+    logging.info(f"Using backend: {args.backend}")
+    
+    # MLX backend warning for hybrid mode (not yet fully integrated)
+    if args.backend == 'mlx':
+        logging.warning(
+            "MLX backend selected. Note: Full hybrid pipeline integration is in progress. "
+            "Currently, VAE/T5 still use PyTorch. DiT can use MLX once pipeline integration is complete."
+        )
 
     if dist.is_initialized():
         base_seed = [args.base_seed] if rank == 0 else [None]

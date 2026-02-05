@@ -117,26 +117,43 @@ For systems with enough memory, keeping both models on MPS avoids CPU↔GPU tran
 
 ### 4. 🔨 High Effort - Architectural Changes
 
-#### 4a. INT8 Quantization
-Quantize the 14B model weights to INT8:
+#### 4a. ✅ Quantization with mps-bitsandbytes (IMPLEMENTED)
 
-```python
-# Using torch.ao.quantization or bitsandbytes
-from torch.ao.quantization import quantize_dynamic
+We now support 4-bit and 8-bit quantization using `mps-bitsandbytes`:
 
-quantized_model = quantize_dynamic(
-    model, 
-    {torch.nn.Linear}, 
-    dtype=torch.qint8
-)
+```bash
+pip install mps-bitsandbytes
 ```
 
-**Requirements:**
-- Calibration dataset for accurate quantization
-- May need custom kernels for MPS
-- Quality validation needed
+```python
+from wan.utils.quantize import quantize_dit_model
 
-**Potential gain:** 2x memory reduction, ~1.3x speed
+# Load model normally
+model = WanModel.from_pretrained(...)
+
+# Quantize to NF4 (4-bit) - best memory savings
+model = quantize_dit_model(model, quant_type='nf4', device='mps')
+
+# Or INT8 (8-bit) - better precision
+model = quantize_dit_model(model, quant_type='int8', device='mps')
+```
+
+**Benchmark Results (M3 Ultra, low_noise_model - 14B params):**
+
+| Quant Type | Memory | Savings | Quant Time | Notes |
+|------------|--------|---------|------------|-------|
+| None (fp32) | 70.7 GB | - | - | Baseline |
+| **NF4 (4-bit)** | **8.8 GB** | **87.5%** | 38s | Best for memory |
+| INT8 (8-bit) | 17.7 GB | 75.0% | 7s | Better precision |
+
+**Note:** Total model has TWO DiT models (low_noise + high_noise), so full quantized inference would use:
+- NF4: ~18 GB (vs 141 GB unquantized)
+- INT8: ~35 GB (vs 141 GB unquantized)
+
+To run the benchmark yourself:
+```bash
+python scripts/benchmark_quantization.py --quant_types none nf4 int8
+```
 
 #### 4b. MLX Backend (Major Rewrite)
 Apple's MLX framework is optimized for Apple Silicon:

@@ -1,6 +1,13 @@
 # MLX Backend for WanModel
 # Provides native Metal-accelerated operations on Apple Silicon
 
-from .norms import WanRMSNormMLX
+from .norms import WanRMSNormMLX, WanLayerNormMLX
+from .rope import rope_params_mlx, rope_apply_mlx, create_rope_freqs_mlx
 
-__all__ = ['WanRMSNormMLX']
+__all__ = [
+    'WanRMSNormMLX',
+    'WanLayerNormMLX',
+    'rope_params_mlx',
+    'rope_apply_mlx',
+    'create_rope_freqs_mlx',
+]

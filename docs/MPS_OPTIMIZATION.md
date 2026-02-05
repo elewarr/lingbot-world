@@ -2,13 +2,14 @@
 
 ## Current Performance Baseline
 
-| Config | Time/Step | Total (5 steps) | Notes |
-|--------|-----------|-----------------|-------|
-| 5 frames, 480×832, fp32 | ~18s | ~1.5 min | Fast, good for testing |
-| 41 frames, 480×832, fp32 | ~160s | ~13 min | Production quality |
-| 81 frames, 480×832, fp32 | ~300s (est) | ~25 min | Full length |
+| Config | Time/Step | VAE Decode | Total | Notes |
+|--------|-----------|------------|-------|-------|
+| 5 frames, 480×832, fp32 | ~18s | ~2s | ~1.5 min | Fast, good for testing |
+| 41 frames, 480×832, fp32 | ~160s | **~19s** | ~13 min | Production (with chunk=2) |
+| 81 frames, 480×832, fp32 | ~300s (est) | ~38s (est) | ~25 min | Full length |
 
-**Hardware:** Mac Studio M2/M3 Ultra, 512GB unified memory
+**Hardware:** Mac Studio M3 Ultra, 512GB unified memory
+**VAE Improvement:** chunk_size=2 provides **1.38x speedup** over no chunking
 
 ---
 
@@ -21,7 +22,33 @@
 
 ### 2. 🔧 Low Effort - Environment Tuning
 
-#### 2a. MPS Memory Allocation Strategy
+#### 2a. VAE Decode Chunk Size
+The VAE decoder processes video frames in chunks to avoid OOM. Tune via environment variables:
+
+```bash
+# Default: 2 for MPS (benchmarked optimal), 16 for CUDA
+export VAE_CHUNK_SIZE=2       # Smaller = faster on MPS (counterintuitively)
+export VAE_CHUNK_THRESHOLD=2  # When to start chunking (default: same as chunk_size)
+```
+
+**Benchmark Results (M3 Ultra, 44 video frames / 11 latent frames):**
+
+| Chunk Size | Time | Speedup vs No Chunk |
+|------------|------|---------------------|
+| No chunk | 25.71s | 1.00x (baseline) |
+| 2 | **18.64s** | **1.38x** |
+| 4 | 23.60s | 1.09x |
+| 6 | 25.38s | 1.01x |
+| 8 | 25.36s | 1.01x |
+
+**Why smaller chunks are faster on MPS:**
+- Reduced memory pressure allows better Metal command buffer pipelining
+- More frequent cache clearing prevents memory fragmentation
+- MPS memory allocator performs better with smaller allocations
+
+**Trade-off:** Chunk size 2 is optimal for speed. Larger chunks may be needed if you see numerical issues.
+
+#### 2b. MPS Memory Allocation Strategy
 ```bash
 # Add to generate.py or set before running
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0  # Disable memory limit

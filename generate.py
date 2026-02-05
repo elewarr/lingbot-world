@@ -7,6 +7,12 @@ from datetime import datetime
 
 warnings.filterwarnings('ignore')
 
+# Suppress MPS fallback warnings and multiprocessing issues on macOS
+if sys.platform == 'darwin':
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Silent fallback for unsupported ops
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', force=True)  # Safer on macOS
+
 import random
 
 import torch
@@ -17,6 +23,29 @@ import wan
 from wan.configs import MAX_AREA_CONFIGS, SIZE_CONFIGS, SUPPORTED_SIZES, WAN_CONFIGS
 from wan.distributed.util import init_distributed_group
 from wan.utils.utils import merge_video_audio, save_video, str2bool
+
+# Cross-platform device detection
+IS_MACOS = sys.platform == 'darwin'
+HAS_MPS = IS_MACOS and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+HAS_CUDA = torch.cuda.is_available()
+
+
+def get_device(device_id=0):
+    """Get the best available device for the current platform."""
+    if HAS_CUDA:
+        return torch.device(f"cuda:{device_id}")
+    elif HAS_MPS:
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+
+
+def synchronize_device():
+    """Synchronize the current device (cross-platform)."""
+    if HAS_CUDA:
+        torch.cuda.synchronize()
+    elif HAS_MPS:
+        torch.mps.synchronize()
 
 
 EXAMPLE_PROMPT = {
@@ -220,7 +249,14 @@ def generate(args):
         args.offload_model = False if world_size > 1 else True
         logging.info(
             f"offload_model is not specified, set to {args.offload_model}.")
+    
+    # Multi-GPU distributed training (CUDA only)
     if world_size > 1:
+        if not HAS_CUDA:
+            raise RuntimeError(
+                "Multi-GPU distributed training requires CUDA. "
+                "Run with a single process for MPS/CPU."
+            )
         torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend="nccl",
@@ -319,7 +355,7 @@ def generate(args):
                 merge_video_audio(video_path=args.save_file, audio_path="tts.wav")
     del video
 
-    torch.cuda.synchronize()
+    synchronize_device()
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()

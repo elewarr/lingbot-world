@@ -74,7 +74,9 @@ def compute_relative_poses(
 
 
 @torch.no_grad()
-def create_meshgrid(n_frames: int, height: int, width: int, bias: float = 0.5, device='cuda', dtype=torch.float32) -> torch.Tensor:
+def create_meshgrid(n_frames: int, height: int, width: int, bias: float = 0.5, device=None, dtype=torch.float32) -> torch.Tensor:
+    if device is None:
+        device = torch.device('cpu')
     x_range = torch.arange(width, device=device, dtype=dtype)
     y_range = torch.arange(height, device=device, dtype=dtype)
     grid_y, grid_x = torch.meshgrid(y_range, x_range, indexing='ij')

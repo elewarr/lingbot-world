@@ -1,13 +1,21 @@
 import math
+import sys
 from einops import rearrange
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as torch_F
+import torch.nn.functional as F
+import torch.nn.functional as torch_F  # Alias used in some places
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
 from .attention import flash_attention
+
+# MPS doesn't support float64
+IS_MACOS = sys.platform == 'darwin'
+HAS_MPS = IS_MACOS and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+# Use float32 for MPS since it doesn't support float64
+PRECISION_DTYPE = torch.float32 if HAS_MPS else torch.float64
 
 __all__ = ['WanModel']
 
@@ -16,7 +24,7 @@ def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    position = position.type(PRECISION_DTYPE)
 
     # calculation
     sinusoid = torch.outer(
@@ -25,18 +33,43 @@ def sinusoidal_embedding_1d(dim, position):
     return x
 
 
-@torch.amp.autocast('cuda', enabled=False)
+def get_autocast_context(device_type, enabled=False, dtype=None):
+    """Get autocast context for cross-platform support.
+    
+    Args:
+        device_type: 'cuda', 'mps', or 'cpu'
+        enabled: Whether autocast is enabled (default False for disabling)
+        dtype: Optional dtype override (e.g., torch.float32)
+    """
+    from contextlib import nullcontext
+    # MPS doesn't support autocast properly, use nullcontext
+    if device_type == 'mps':
+        return nullcontext()
+    # For non-MPS, use appropriate autocast
+    if dtype is not None:
+        return torch.amp.autocast(device_type, dtype=dtype)
+    return torch.amp.autocast(device_type, enabled=enabled)
+
+
+def _get_device_type():
+    """Get the appropriate device type for autocast."""
+    if HAS_MPS:
+        return 'mps'
+    return 'cuda'
+
+
+# Note: RoPE params don't need autocast - they compute in float32/64 precision
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
     freqs = torch.outer(
         torch.arange(max_seq_len),
         1.0 / torch.pow(theta,
-                        torch.arange(0, dim, 2).to(torch.float64).div(dim)))
+                        torch.arange(0, dim, 2).to(PRECISION_DTYPE).div(dim)))
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
 
 
-@torch.amp.autocast('cuda', enabled=False)
+# Note: RoPE apply computes in PRECISION_DTYPE, autocast disabled for accuracy
 def rope_apply(x, grid_sizes, freqs):
     n, c = x.size(2), x.size(3) // 2
 
@@ -48,8 +81,8 @@ def rope_apply(x, grid_sizes, freqs):
     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
         seq_len = f * h * w
 
-        # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(
+        # precompute multipliers - use PRECISION_DTYPE for MPS compatibility
+        x_i = torch.view_as_complex(x[i, :seq_len].to(PRECISION_DTYPE).reshape(
             seq_len, n, -1, 2))
         freqs_i = torch.cat([
             freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
@@ -242,7 +275,7 @@ class WanAttentionBlock(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
         assert e.dtype == torch.float32
-        with torch.amp.autocast('cuda', dtype=torch.float32):
+        with get_autocast_context(_get_device_type(), dtype=torch.float32):
             e = (self.modulation.unsqueeze(0) + e).chunk(6, dim=2)
         assert e[0].dtype == torch.float32
 
@@ -250,7 +283,7 @@ class WanAttentionBlock(nn.Module):
         y = self.self_attn(
             self.norm1(x).float() * (1 + e[1].squeeze(2)) + e[0].squeeze(2),
             seq_lens, grid_sizes, freqs)
-        with torch.amp.autocast('cuda', dtype=torch.float32):
+        with get_autocast_context(_get_device_type(), dtype=torch.float32):
             x = x + y * e[2].squeeze(2)
 
         # cam injection (only if dit_cond_dict is provided and contains c2ws_plucker_emb)
@@ -267,7 +300,7 @@ class WanAttentionBlock(nn.Module):
             x = x + self.cross_attn(self.norm3(x), context, context_lens)
             y = self.ffn(
                 self.norm2(x).float() * (1 + e[4].squeeze(2)) + e[3].squeeze(2))
-            with torch.amp.autocast('cuda', dtype=torch.float32):
+            with get_autocast_context(_get_device_type(), dtype=torch.float32):
                 x = x + y * e[5].squeeze(2)
             return x
 
@@ -299,7 +332,7 @@ class Head(nn.Module):
             e(Tensor): Shape [B, L1, C]
         """
         assert e.dtype == torch.float32
-        with torch.amp.autocast('cuda', dtype=torch.float32):
+        with get_autocast_context(_get_device_type(), dtype=torch.float32):
             e = (self.modulation.unsqueeze(0) + e.unsqueeze(2)).chunk(2, dim=2)
             x = (
                 self.head(
@@ -480,7 +513,9 @@ class WanModel(ModelMixin, ConfigMixin):
         # time embeddings
         if t.dim() == 1:
             t = t.expand(t.size(0), seq_len)
-        with torch.amp.autocast('cuda', dtype=torch.float32):
+        # Use appropriate device for autocast (CUDA only)
+        autocast_device = 'cuda' if x.device.type == 'cuda' else 'cpu'
+        with torch.amp.autocast(autocast_device, dtype=torch.float32):
             bt = t.size(0)
             t = t.flatten()
             e = self.time_embedding(

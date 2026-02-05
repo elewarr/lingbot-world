@@ -1,10 +1,33 @@
 import logging
+import sys
 
 import torch
-import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+
+# Cross-platform autocast support
+IS_MACOS = sys.platform == 'darwin'
+HAS_MPS = IS_MACOS and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+HAS_CUDA = torch.cuda.is_available()
+
+
+def get_autocast_device_type(device):
+    """Get the device type for torch.amp.autocast based on device."""
+    if isinstance(device, str):
+        device_type = device.split(':')[0]
+    elif isinstance(device, torch.device):
+        device_type = device.type
+    else:
+        device_type = 'cpu'
+    
+    if device_type == 'cuda':
+        return 'cuda'
+    elif device_type == 'mps':
+        return 'cpu'  # MPS doesn't fully support autocast
+    else:
+        return 'cpu'
+
 
 __all__ = [
     "Wan2_2_VAE",
@@ -1024,7 +1047,8 @@ class Wan2_2_VAE:
         try:
             if not isinstance(videos, list):
                 raise TypeError("videos should be a list")
-            with amp.autocast(dtype=self.dtype):
+            autocast_device = get_autocast_device_type(self.device)
+            with torch.amp.autocast(autocast_device, dtype=self.dtype):
                 return [
                     self.model.encode(u.unsqueeze(0),
                                       self.scale).float().squeeze(0)
@@ -1038,7 +1062,8 @@ class Wan2_2_VAE:
         try:
             if not isinstance(zs, list):
                 raise TypeError("zs should be a list")
-            with amp.autocast(dtype=self.dtype):
+            autocast_device = get_autocast_device_type(self.device)
+            with torch.amp.autocast(autocast_device, dtype=self.dtype):
                 return [
                     self.model.decode(u.unsqueeze(0),
                                       self.scale).float().clamp_(-1,

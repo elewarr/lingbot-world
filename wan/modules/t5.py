@@ -473,7 +473,7 @@ class T5EncoderModel:
         self,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        device=None,
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -481,6 +481,15 @@ class T5EncoderModel:
         self.text_len = text_len
         self.dtype = dtype
         self.device = device
+
+        if not self.device:
+            if torch.cuda.is_available():
+                self.device = torch.device('cuda')
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                self.device = torch.device('mps')
+            else:
+                self.device = torch.device('cpu')
+
         self.checkpoint_path = checkpoint_path
         self.tokenizer_path = tokenizer_path
 

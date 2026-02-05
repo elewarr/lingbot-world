@@ -1,23 +1,83 @@
+import sys
 import torch
 
 try:
-    import flash_attn_interface
+    from flash_attn import flash_attn_interface
     FLASH_ATTN_3_AVAILABLE = True
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     FLASH_ATTN_3_AVAILABLE = False
 
 try:
     import flash_attn
     FLASH_ATTN_2_AVAILABLE = True
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     FLASH_ATTN_2_AVAILABLE = False
 
 import warnings
+
+# Detect macOS/MPS environment
+IS_MACOS = sys.platform == 'darwin'
+HAS_MPS = IS_MACOS and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
 
 __all__ = [
     'flash_attention',
     'attention',
 ]
+
+
+def _sdpa_attention(
+    q,
+    k,
+    v,
+    q_lens=None,
+    k_lens=None,
+    dropout_p=0.,
+    softmax_scale=None,
+    q_scale=None,
+    causal=False,
+    dtype=torch.bfloat16,
+):
+    """
+    PyTorch native scaled dot-product attention fallback.
+    Works on CPU, CUDA, and MPS devices.
+    
+    q:              [B, Lq, Nq, C1].
+    k:              [B, Lk, Nk, C1].
+    v:              [B, Lk, Nk, C2]. Nq must be divisible by Nk.
+    """
+    out_dtype = q.dtype
+    
+    # Apply q_scale if provided
+    if q_scale is not None:
+        q = q * q_scale
+    
+    # Transpose to [B, Nq, Lq, C] for PyTorch SDPA
+    q_t = q.transpose(1, 2).to(dtype)
+    k_t = k.transpose(1, 2).to(dtype)
+    v_t = v.transpose(1, 2).to(dtype)
+    
+    # Handle variable-length sequences with masking if needed
+    # Note: For now, we ignore q_lens/k_lens since SDPA doesn't directly support them
+    # This may affect accuracy for batched variable-length sequences
+    if q_lens is not None or k_lens is not None:
+        warnings.warn(
+            'Padding mask is disabled when using scaled_dot_product_attention on MPS/CPU. '
+            'This may affect results for variable-length sequences.',
+            UserWarning,
+            stacklevel=3
+        )
+    
+    out = torch.nn.functional.scaled_dot_product_attention(
+        q_t, k_t, v_t,
+        attn_mask=None,
+        is_causal=causal,
+        dropout_p=dropout_p,
+        scale=softmax_scale
+    )
+    
+    # Transpose back to [B, Lq, Nq, C]
+    out = out.transpose(1, 2).contiguous()
+    return out.type(out_dtype)
 
 
 def flash_attention(
@@ -49,8 +109,24 @@ def flash_attention(
     dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
     """
     half_dtypes = (torch.float16, torch.bfloat16)
-    assert dtype in half_dtypes
-    assert q.device.type == 'cuda' and q.size(-1) <= 256
+    # For MPS with float32, skip the dtype assertion
+    if q.device.type == 'cuda':
+        assert dtype in half_dtypes, f"dtype must be float16 or bfloat16 for CUDA, got {dtype}"
+    
+    # Use PyTorch native SDPA for non-CUDA devices (MPS, CPU)
+    if q.device.type != 'cuda':
+        return _sdpa_attention(
+            q, k, v,
+            q_lens=q_lens,
+            k_lens=k_lens,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            q_scale=q_scale,
+            causal=causal,
+            dtype=dtype,
+        )
+    
+    assert q.size(-1) <= 256
 
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype

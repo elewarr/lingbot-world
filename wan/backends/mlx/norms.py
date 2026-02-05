@@ -7,7 +7,7 @@ to enable Metal-accelerated inference on Apple Silicon.
 import mlx.core as mx
 import mlx.nn as nn
 
-__all__ = ['WanRMSNormMLX', 'WanLayerNormMLX']
+__all__ = ["WanRMSNormMLX", "WanLayerNormMLX"]
 
 
 class WanRMSNormMLX(nn.Module):
@@ -16,6 +16,7 @@ class WanRMSNormMLX(nn.Module):
     Implements the RMSNorm formula: x * rsqrt(mean(x^2) + eps) * weight
 
     This is a direct port of WanRMSNorm from wan/modules/model.py to MLX.
+    Uses mx.fast.rms_norm for optimized Metal kernel performance.
     Used in self-attention for query/key normalization.
 
     Args:
@@ -30,18 +31,8 @@ class WanRMSNormMLX(nn.Module):
         # Learnable scale parameter, initialized to ones
         self.weight = mx.ones((dim,))
 
-    def _norm(self, x: mx.array) -> mx.array:
-        """Apply RMS normalization without the learnable weight.
-
-        Formula: x * rsqrt(mean(x^2) + eps)
-        """
-        # Compute mean of squared values along the last dimension
-        mean_sq = mx.mean(mx.square(x), axis=-1, keepdims=True)
-        # Apply rsqrt normalization
-        return x * mx.rsqrt(mean_sq + self.eps)
-
     def __call__(self, x: mx.array) -> mx.array:
-        """Apply RMSNorm with learnable weight.
+        """Apply RMSNorm with learnable weight using fast fused kernel.
 
         Args:
             x: Input tensor of shape [..., dim]
@@ -49,17 +40,17 @@ class WanRMSNormMLX(nn.Module):
         Returns:
             Normalized tensor of shape [..., dim]
         """
-        # Convert to float32 for numerical stability, normalize, then scale
-        x_float = x.astype(mx.float32)
-        normed = self._norm(x_float)
-        # Apply learnable weight and cast back to input dtype
-        return (normed * self.weight).astype(x.dtype)
+        # Use fast fused kernel for better performance
+        # mx.fast.rms_norm computes in float32, cast back to preserve input dtype
+        out = mx.fast.rms_norm(x, self.weight, self.eps)
+        return out.astype(x.dtype) if out.dtype != x.dtype else out
 
 
 class WanLayerNormMLX(nn.Module):
     """Layer Normalization for MLX.
 
     A direct port of WanLayerNorm from wan/modules/model.py to MLX.
+    Uses mx.fast.layer_norm for optimized Metal kernel performance.
     Used in attention blocks for pre-normalization.
 
     Key differences from PyTorch nn.LayerNorm:
@@ -89,7 +80,7 @@ class WanLayerNormMLX(nn.Module):
             self.bias = None
 
     def __call__(self, x: mx.array) -> mx.array:
-        """Apply LayerNorm.
+        """Apply LayerNorm using fast fused kernel.
 
         Args:
             x: Input tensor of shape [..., dim]
@@ -97,19 +88,6 @@ class WanLayerNormMLX(nn.Module):
         Returns:
             Normalized tensor of shape [..., dim]
         """
-        # Convert to float32 for numerical stability
-        x_float = x.astype(mx.float32)
-
-        # Compute mean and variance along the last dimension
-        mean = mx.mean(x_float, axis=-1, keepdims=True)
-        var = mx.var(x_float, axis=-1, keepdims=True)
-
-        # Normalize
-        normed = (x_float - mean) * mx.rsqrt(var + self.eps)
-
-        # Apply affine transform if enabled
-        if self.elementwise_affine:
-            normed = normed * self.weight + self.bias
-
-        # Cast back to input dtype
-        return normed.astype(x.dtype)
+        # Use fast fused kernel for better performance
+        # mx.fast.layer_norm handles float32 conversion internally
+        return mx.fast.layer_norm(x, self.weight, self.bias, self.eps)

@@ -534,7 +534,37 @@ class WanI2V:
                 empty_cache()
 
             if self.rank == 0:
-                videos = self.vae.decode(x0)
+                # For large frame counts, decode in chunks to avoid OOM
+                # Latent shape is [C, T, H, W] where T is temporal dimension
+                latent_frames = x0[0].shape[1]  # Temporal dimension
+                
+                # Chunk size in latent space (8 latent frames = 32 video frames)
+                chunk_size = 8 if HAS_MPS else 16
+                
+                if latent_frames > chunk_size:
+                    # Chunked decode for large videos
+                    logging.info(f"Using chunked VAE decode: {latent_frames} latent frames, chunk_size={chunk_size}")
+                    video_chunks = []
+                    latent = x0[0]  # [C, T, H, W]
+                    
+                    for i in range(0, latent_frames, chunk_size):
+                        end_idx = min(i + chunk_size, latent_frames)
+                        chunk = latent[:, i:end_idx, :, :]  # [C, chunk_T, H, W]
+                        
+                        # Decode this chunk
+                        chunk_video = self.vae.decode([chunk])[0]  # [C, T*4, H*8, W*8]
+                        video_chunks.append(chunk_video)
+                        
+                        # Clear memory between chunks
+                        if HAS_MPS:
+                            empty_cache()
+                    
+                    # Concatenate along temporal dimension
+                    videos = [torch.cat(video_chunks, dim=1)]
+                    del video_chunks
+                else:
+                    # Standard decode for small videos
+                    videos = self.vae.decode(x0)
 
         del noise, latent, x0
         del sample_scheduler

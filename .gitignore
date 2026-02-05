@@ -1,3 +1,55 @@
 __pycache__/
 .DS_Store
 .vscode*
+
+*.ncu-rep
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.eggs/
+
+# IDE-related
+.idea/
+.vscode/
+
+# Agent workspace and configuration
+.workspace/
+.opencode/
+**/AGENTS.md
+**/.cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+*.mp4
+
+# Model weights (large files - do not commit)
+models/
+
+# Generated outputs
+outputs/
+*.png
+
+# IMPORTANT: Never commit sensitive data (API keys, credentials, personal info)
+# to this repository, especially when pushing to upstream.

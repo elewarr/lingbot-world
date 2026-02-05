@@ -3,7 +3,8 @@
 
 from .norms import WanRMSNormMLX, WanLayerNormMLX
 from .rope import rope_params_mlx, rope_apply_mlx, create_rope_freqs_mlx
-from .attention import WanSelfAttentionMLX
+from .attention import WanSelfAttentionMLX, WanCrossAttentionMLX
+from .blocks import WanAttentionBlockMLX
 
 __all__ = [
     'WanRMSNormMLX',
@@ -12,4 +13,6 @@ __all__ = [
     'rope_apply_mlx',
     'create_rope_freqs_mlx',
     'WanSelfAttentionMLX',
+    'WanCrossAttentionMLX',
+    'WanAttentionBlockMLX',
 ]

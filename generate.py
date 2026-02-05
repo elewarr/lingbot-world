@@ -10,6 +10,8 @@ warnings.filterwarnings('ignore')
 # Suppress MPS fallback warnings and multiprocessing issues on macOS
 if sys.platform == 'darwin':
     os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Silent fallback for unsupported ops
+    # MPS memory optimization - allow full memory usage
+    os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.0')
     import multiprocessing
     multiprocessing.set_start_method('spawn', force=True)  # Safer on macOS
 

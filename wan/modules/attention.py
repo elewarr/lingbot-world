@@ -1,3 +1,4 @@
+import os
 import sys
 import torch
 
@@ -18,6 +19,10 @@ import warnings
 # Detect macOS/MPS environment
 IS_MACOS = sys.platform == 'darwin'
 HAS_MPS = IS_MACOS and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+
+# Experimental: Use float16 for attention computation on MPS (may be faster but less stable)
+# Set LINGBOT_ATTENTION_FP16=1 to enable
+MPS_ATTENTION_FP16 = HAS_MPS and os.environ.get('LINGBOT_ATTENTION_FP16', '0') == '1'
 
 __all__ = [
     'flash_attention',
@@ -51,10 +56,17 @@ def _sdpa_attention(
     if q_scale is not None:
         q = q * q_scale
     
+    # Determine compute dtype for attention
+    # On MPS with LINGBOT_ATTENTION_FP16=1, use float16 for faster computation
+    if MPS_ATTENTION_FP16:
+        compute_dtype = torch.float16
+    else:
+        compute_dtype = dtype
+    
     # Transpose to [B, Nq, Lq, C] for PyTorch SDPA
-    q_t = q.transpose(1, 2).to(dtype)
-    k_t = k.transpose(1, 2).to(dtype)
-    v_t = v.transpose(1, 2).to(dtype)
+    q_t = q.transpose(1, 2).to(compute_dtype)
+    k_t = k.transpose(1, 2).to(compute_dtype)
+    v_t = v.transpose(1, 2).to(compute_dtype)
     
     # Handle variable-length sequences with masking if needed
     # Note: For now, we ignore q_lens/k_lens since SDPA doesn't directly support them

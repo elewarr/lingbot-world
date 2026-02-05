@@ -17,6 +17,14 @@ from .convert import (
     WeightConverter,
     ShardedCheckpointLoader,
 )
+from .quantize import (
+    quantize_model,
+    save_quantized_model,
+    load_quantized_model,
+    get_model_memory_bytes,
+    QuantizationConfig,
+    DEFAULT_EXCLUDE_PATTERNS,
+)
 
 __all__ = [
     # Norm layers
@@ -44,4 +52,11 @@ __all__ = [
     'convert_weight',
     'WeightConverter',
     'ShardedCheckpointLoader',
+    # Quantization
+    'quantize_model',
+    'save_quantized_model',
+    'load_quantized_model',
+    'get_model_memory_bytes',
+    'QuantizationConfig',
+    'DEFAULT_EXCLUDE_PATTERNS',
 ]

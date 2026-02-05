@@ -19,7 +19,7 @@ import mlx.nn as nn
 from .norms import WanRMSNormMLX
 from .rope import rope_apply_mlx
 
-__all__ = ['WanSelfAttentionMLX']
+__all__ = ['WanSelfAttentionMLX', 'WanCrossAttentionMLX']
 
 
 class WanSelfAttentionMLX(nn.Module):  # type: ignore[misc, name-defined]
@@ -191,6 +191,148 @@ class WanSelfAttentionMLX(nn.Module):  # type: ignore[misc, name-defined]
         # For scaled_dot_product_attention, mask should be additive:
         # 0 for valid positions, -inf for masked positions
         # Convert boolean mask to float mask
+        zeros = mx.zeros(key_mask.shape, dtype=mx.float32)
+        neg_inf = mx.full(key_mask.shape, float('-inf'), dtype=mx.float32)
+        mask = mx.where(key_mask, zeros, neg_inf)
+
+        return mask
+
+
+class WanCrossAttentionMLX(WanSelfAttentionMLX):
+    """Cross-attention layer with QK normalization for MLX.
+
+    This is a direct port of WanCrossAttention from wan/modules/model.py to MLX.
+    Inherits from WanSelfAttentionMLX but uses different forward signature:
+    - Q comes from x (hidden states)
+    - K, V come from context (text embeddings from T5)
+    - No RoPE is applied (cross-attention doesn't use positional embeddings)
+
+    Args:
+        dim: Hidden dimension of the model (e.g., 2048)
+        num_heads: Number of attention heads (e.g., 16)
+        window_size: Window size for local attention. (-1, -1) means global attention.
+        qk_norm: If True, apply RMSNorm to query and key projections
+        eps: Epsilon for normalization layers
+    """
+
+    def __call__(  # type: ignore[override]
+        self,
+        x: mx.array,
+        context: mx.array,
+        context_lens: Optional[mx.array],
+    ) -> mx.array:
+        """Forward pass of the cross-attention layer.
+
+        Args:
+            x: Input tensor (hidden states) of shape [B, L1, C] where:
+                B = batch size
+                L1 = sequence length of hidden states
+                C = hidden dimension (self.dim)
+            context: Context tensor (text embeddings) of shape [B, L2, C] where:
+                L2 = sequence length of text embeddings
+            context_lens: Optional tensor of shape [B] containing the actual context
+                length for each sample in the batch. If None, assumes all positions
+                are valid.
+
+        Returns:
+            Output tensor of shape [B, L1, C]
+        """
+        b, s_x, _ = x.shape
+        s_ctx = context.shape[1]
+        n, d = self.num_heads, self.head_dim
+
+        # Compute Q from x
+        q = self.q(x)
+        if self.qk_norm and self.norm_q is not None:
+            q = self.norm_q(q)
+
+        # Compute K, V from context
+        k = self.k(context)
+        if self.qk_norm and self.norm_k is not None:
+            k = self.norm_k(k)
+        v = self.v(context)
+
+        # Reshape to [B, L, num_heads, head_dim]
+        q = q.reshape(b, s_x, n, d)
+        k = k.reshape(b, s_ctx, n, d)
+        v = v.reshape(b, s_ctx, n, d)
+
+        # NOTE: No RoPE applied in cross-attention
+
+        # Transpose to [B, num_heads, L, head_dim] for attention
+        q = mx.transpose(q, (0, 2, 1, 3))
+        k = mx.transpose(k, (0, 2, 1, 3))
+        v = mx.transpose(v, (0, 2, 1, 3))
+
+        # Create attention mask for variable context lengths
+        mask = self._create_cross_attention_mask(context_lens, s_x, s_ctx)
+
+        # Compute scaled dot-product attention using MLX's optimized implementation
+        attn_output = mx.fast.scaled_dot_product_attention(
+            q, k, v,
+            scale=self.scale,
+            mask=mask,
+        )
+
+        # Transpose back to [B, L, num_heads, head_dim]
+        attn_output = mx.transpose(attn_output, (0, 2, 1, 3))
+
+        # Flatten heads: [B, L, num_heads, head_dim] -> [B, L, dim]
+        attn_output = attn_output.reshape(b, s_x, -1)
+
+        # Output projection
+        output = self.o(attn_output)
+
+        return output  # type: ignore[no-any-return]
+
+    def _create_cross_attention_mask(
+        self,
+        context_lens: Optional[mx.array],
+        query_len: int,
+        key_len: int,
+    ) -> Optional[mx.array]:
+        """Create attention mask for cross-attention with variable-length contexts.
+
+        For cross-attention, we mask out key/value positions that are padding
+        in the context sequence.
+
+        Args:
+            context_lens: Optional tensor of shape [B] with actual context lengths.
+                If None, assumes all positions are valid.
+            query_len: Query sequence length (L1)
+            key_len: Key/Value sequence length (L2)
+
+        Returns:
+            Mask tensor of shape [B, 1, 1, L2] or None if no masking needed
+        """
+        if context_lens is None:
+            return None
+
+        batch_size = context_lens.shape[0]
+
+        # Check if all contexts have the same length (no padding)
+        context_lens_list = [int(context_lens[i].item()) for i in range(batch_size)]
+        if all(cl == key_len for cl in context_lens_list):
+            return None
+
+        # Create position indices
+        positions = mx.arange(key_len)  # [L2]
+
+        # Create mask: positions < context_len for each sample
+        masks = []
+        for i in range(batch_size):
+            ctx_len = context_lens_list[i]
+            # For key positions: True if position < ctx_len (valid), False otherwise (padding)
+            mask_row = positions < ctx_len  # [L2]
+            masks.append(mask_row)
+
+        # Stack to [B, L2] and expand for broadcasting
+        key_mask = mx.stack(masks, axis=0)  # [B, L2]
+
+        # Expand to [B, 1, 1, L2] for broadcasting with attention scores [B, H, L1, L2]
+        key_mask = mx.expand_dims(key_mask, axis=(1, 2))  # [B, 1, 1, L2]
+
+        # Convert boolean mask to additive mask: 0 for valid, -inf for masked
         zeros = mx.zeros(key_mask.shape, dtype=mx.float32)
         neg_inf = mx.full(key_mask.shape, float('-inf'), dtype=mx.float32)
         mask = mx.where(key_mask, zeros, neg_inf)

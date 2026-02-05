@@ -155,25 +155,42 @@ To run the benchmark yourself:
 python scripts/benchmark_quantization.py --quant_types none nf4 int8
 ```
 
-#### 4b. MLX Backend (Major Rewrite)
-Apple's MLX framework is optimized for Apple Silicon:
+#### 4b. ✅ MLX Backend (IMPLEMENTED)
+
+Apple's MLX framework is now fully supported for the DiT model:
 
 ```python
-# MLX equivalent would look like:
-import mlx.core as mx
-import mlx.nn as nn
+from wan.backends.mlx.model import WanModelMLX
+from wan.backends.mlx.quantize import quantize_model
 
-class WanModelMLX(nn.Module):
-    # Rewrite model using MLX primitives
-    pass
+# Load model with automatic PyTorch weight conversion
+model = WanModelMLX.from_pretrained("models/lingbot-world-base-cam/low_noise_model")
+
+# Optional: Apply quantization for reduced memory
+model = quantize_model(model, quant_type='int4')  # Or 'int8', 'nf4'
 ```
 
-**Requirements:**
-- Full model rewrite (~2000 lines)
-- New attention implementation
-- Weight conversion from PyTorch
+**Features:**
+- Full WanModel port (~2000 lines MLX code)
+- Automatic weight conversion from PyTorch with caching
+- 4-bit and 8-bit quantization support
+- Hybrid pipeline (MLX DiT + PyTorch VAE/T5)
 
-**Potential gain:** 2-5x speed, native Metal optimization
+**Benchmark Results (synthetic, see [MLX_BENCHMARKS.md](./MLX_BENCHMARKS.md)):**
+
+| Backend | Frames | Quant | Speedup | Memory |
+|---------|--------|-------|---------|--------|
+| MPS     | 41     | None  | 1.0x    | 95MB*  |
+| MLX     | 41     | None  | 2.5x    | 95MB*  |
+| MLX     | 41     | INT8  | 2.4x    | 29MB*  |
+| MLX     | 41     | NF4   | 2.4x    | 18MB*  |
+
+\* Synthetic benchmark with ~100M param model. Production model is 14B params.
+
+Run benchmarks yourself:
+```bash
+python scripts/benchmark_mlx.py --mode synthetic
+```
 
 #### 4c. Core ML Conversion
 Convert to Core ML for Apple's neural engine:

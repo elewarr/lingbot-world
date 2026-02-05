@@ -135,6 +135,10 @@ def _should_quantize(path: str, module: Any, exclude_patterns: List[str]) -> boo
     Returns:
         True if module should be quantized
     """
+    # Only quantize modules that have to_quantized method (Linear, Embedding, etc.)
+    if not hasattr(module, 'to_quantized'):
+        return False
+    
     # Check if path matches any exclude pattern
     for pattern in exclude_patterns:
         if pattern in path:

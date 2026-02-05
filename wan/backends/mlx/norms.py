@@ -7,7 +7,7 @@ to enable Metal-accelerated inference on Apple Silicon.
 import mlx.core as mx
 import mlx.nn as nn
 
-__all__ = ['WanRMSNormMLX']
+__all__ = ['WanRMSNormMLX', 'WanLayerNormMLX']
 
 
 class WanRMSNormMLX(nn.Module):
@@ -54,3 +54,62 @@ class WanRMSNormMLX(nn.Module):
         normed = self._norm(x_float)
         # Apply learnable weight and cast back to input dtype
         return (normed * self.weight).astype(x.dtype)
+
+
+class WanLayerNormMLX(nn.Module):
+    """Layer Normalization for MLX.
+
+    A direct port of WanLayerNorm from wan/modules/model.py to MLX.
+    Used in attention blocks for pre-normalization.
+
+    Key differences from PyTorch nn.LayerNorm:
+    - Computes in float32 for numerical stability
+    - Casts result back to input dtype
+    - Default eps=1e-6 (not 1e-5)
+    - Default elementwise_affine=False (no learnable weight/bias)
+
+    Args:
+        dim: Dimension of the input features (last axis size)
+        eps: Small constant for numerical stability (default: 1e-6)
+        elementwise_affine: If True, adds learnable weight and bias (default: False)
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = False):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+
+        # Initialize weight and bias if using affine transform
+        if elementwise_affine:
+            self.weight = mx.ones((dim,))
+            self.bias = mx.zeros((dim,))
+        else:
+            self.weight = None
+            self.bias = None
+
+    def __call__(self, x: mx.array) -> mx.array:
+        """Apply LayerNorm.
+
+        Args:
+            x: Input tensor of shape [..., dim]
+
+        Returns:
+            Normalized tensor of shape [..., dim]
+        """
+        # Convert to float32 for numerical stability
+        x_float = x.astype(mx.float32)
+
+        # Compute mean and variance along the last dimension
+        mean = mx.mean(x_float, axis=-1, keepdims=True)
+        var = mx.var(x_float, axis=-1, keepdims=True)
+
+        # Normalize
+        normed = (x_float - mean) * mx.rsqrt(var + self.eps)
+
+        # Apply affine transform if enabled
+        if self.elementwise_affine:
+            normed = normed * self.weight + self.bias
+
+        # Cast back to input dtype
+        return normed.astype(x.dtype)

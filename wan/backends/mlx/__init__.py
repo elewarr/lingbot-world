@@ -6,6 +6,7 @@ from .rope import rope_params_mlx, rope_apply_mlx, create_rope_freqs_mlx
 from .attention import WanSelfAttentionMLX, WanCrossAttentionMLX
 from .blocks import WanAttentionBlockMLX
 from .head import HeadMLX
+from .model import WanModelMLX
 from .convert import (
     convert_pytorch_to_mlx,
     load_mlx_weights,
@@ -32,6 +33,8 @@ __all__ = [
     'WanAttentionBlockMLX',
     # Head
     'HeadMLX',
+    # Model
+    'WanModelMLX',
     # Weight conversion
     'convert_pytorch_to_mlx',
     'load_mlx_weights',

@@ -48,8 +48,6 @@ class MLXBackend(Backend):
             quantization_bits: Optional quantization (4 or 8 bits)
         """
         self._quantization_bits = quantization_bits
-        self._compiled_forward: Optional[Any] = None
-        self._current_model_id: Optional[int] = None
 
     @property
     def name(self) -> str:
@@ -137,11 +135,9 @@ class MLXBackend(Backend):
         y: Optional[Any] = None,
         dit_cond_dict: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Execute WanModelMLX forward pass with compiled kernel fusion.
+        """Execute WanModelMLX forward pass.
 
-        Uses mx.compile() to fuse operations for better Metal performance.
-        The compiled function is cached per model instance.
-
+        The model internally uses mx.compile() for kernel fusion.
         Handles tensor conversion from PyTorch if needed.
 
         Args:
@@ -183,40 +179,15 @@ class MLXBackend(Backend):
         if dit_cond_dict is not None:
             dit_cond_dict = convert_dit_cond_dict_to_mx(dit_cond_dict)
 
-        # Create compiled forward on first call or if model changed
-        model_id = id(model)
-        if self._compiled_forward is None or self._current_model_id != model_id:
-            # Create compiled wrapper for this model
-            # mx.compile fuses operations for better Metal kernel performance
-            @mx.compile
-            def _compiled_model_forward(
-                x_: List[mx.array],
-                t_: mx.array,
-                context_: List[mx.array],
-                seq_len_: int,
-                y_: Optional[List[mx.array]] = None,
-                dit_cond_dict_: Optional[Dict[str, Any]] = None,
-            ) -> List[mx.array]:
-                return model(
-                    x=x_,
-                    t=t_,
-                    context=context_,
-                    seq_len=seq_len_,
-                    y=y_,
-                    dit_cond_dict=dit_cond_dict_,
-                )
-
-            self._compiled_forward = _compiled_model_forward
-            self._current_model_id = model_id
-
-        # Run compiled forward pass
-        output = self._compiled_forward(
-            x,
-            t,
-            context,
-            seq_len,
-            y,
-            dit_cond_dict,
+        # The model now handles mx.compile internally via WanModelMLX.__call__
+        # so we just invoke the model directly
+        output = model(
+            x=x,
+            t=t,
+            context=context,
+            seq_len=seq_len,
+            y=y,
+            dit_cond_dict=dit_cond_dict,
         )
 
         # Ensure computation is complete

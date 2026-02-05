@@ -230,6 +230,9 @@ class WanModelMLX(nn.Module):  # type: ignore[misc, name-defined]
         head_dim = dim // num_heads
         self._freqs_cos, self._freqs_sin = create_rope_freqs_mlx(1024, head_dim)
 
+        # Compiled forward pass - initialized lazily on first call
+        self._compiled_forward: Optional[Any] = None
+
     def _text_embedding(self, x: mx.array) -> mx.array:
         """Apply text embedding MLP: Linear -> GELU(tanh) -> Linear."""
         x = self.text_embedding_linear1(x)
@@ -259,7 +262,38 @@ class WanModelMLX(nn.Module):  # type: ignore[misc, name-defined]
         y: Optional[List[mx.array]] = None,
         dit_cond_dict: Optional[Dict[str, Any]] = None,
     ) -> List[mx.array]:
-        """Forward pass through the diffusion model.
+        """Forward pass through the diffusion model with mx.compile.
+
+        Uses mx.compile() for kernel fusion and better Metal performance.
+        The compiled function is created lazily on first call.
+
+        Args:
+            x: List of input video tensors, each [C_in, F, H, W]
+            t: Diffusion timesteps of shape [B]
+            context: List of text embeddings, each [L, C]
+            seq_len: Maximum sequence length for positional encoding
+            y: Optional conditional video inputs for i2v mode
+            dit_cond_dict: Optional dict containing camera embeddings
+
+        Returns:
+            List of denoised video tensors [C_out, F, H, W]
+        """
+        # Lazily compile forward pass on first call
+        if self._compiled_forward is None:
+            self._compiled_forward = mx.compile(self._forward_impl)
+
+        return self._compiled_forward(x, t, context, seq_len, y, dit_cond_dict)
+
+    def _forward_impl(
+        self,
+        x: List[mx.array],
+        t: mx.array,
+        context: List[mx.array],
+        seq_len: int,
+        y: Optional[List[mx.array]] = None,
+        dit_cond_dict: Optional[Dict[str, Any]] = None,
+    ) -> List[mx.array]:
+        """Internal forward implementation (called via mx.compile).
 
         Args:
             x: List of input video tensors, each [C_in, F, H, W]
